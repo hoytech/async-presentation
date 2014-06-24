@@ -1,0 +1,425 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" 
+	"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+
+<head>
+<title>Async Servers</title>
+<!-- metadata -->
+<meta http-equiv="Content-Type" content="text/html;charset=UTF-8">
+<meta name="generator" content="S5" />
+<meta name="version" content="S5 1.1" />
+<!-- configuration parameters -->
+<meta name="defaultView" content="slideshow" />
+<meta name="controlVis" content="hidden" />
+<!-- style sheet links -->
+<link rel="stylesheet" href="ui/default/slides.css" type="text/css" media="projection" id="slideProj" />
+<link rel="stylesheet" href="ui/default/outline.css" type="text/css" media="screen" id="outlineStyle" />
+<link rel="stylesheet" href="ui/default/print.css" type="text/css" media="print" id="slidePrint" />
+<link rel="stylesheet" href="ui/default/opera.css" type="text/css" media="projection" id="operaFix" />
+<!-- S5 JS -->
+<script src="ui/default/slides.js" type="text/javascript"></script>
+
+
+</head>
+<body>
+
+<div class="layout">
+<div id="controls"><!-- DO NOT EDIT --></div>
+<div id="currentSlide"><!-- DO NOT EDIT --></div>
+<div id="header"></div>
+<div id="footer">
+<h1>Blocking Operations, Exceptions, and Logging in Asynchronous Servers</h1>
+</div>
+
+</div>
+
+
+<div class="presentation">
+
+<div class="slide">
+  <center>
+  <h1 style="font-size: 230%">Blocking Operations, Exceptions, and Logging in Asynchronous Servers</h1>
+  <br>
+  <h2>Doug Hoyte</h2>
+  <h2>Fractal</h2>
+  </center>
+</div>
+
+
+<div class="slide">
+  <h1>Motivation</h1>
+  <ul>
+    <li>I needed to build a server to handle complex authentication/authorization logic</li>
+    <li>Goal was to replace a crufty Java+Python HTTP server that developers and ops hated</li>
+    <li>Settled on simple <b>Plack</b>/<b>Twiggy</b>/<b>AnyEvent::*</b> design</li>
+    <li>This talk is about a few modules developed in parallel with this server (and some other apps)</li>
+  </ul>
+</div>
+
+
+
+<div class="slide">
+  <h1>AnyEvent::Task</h1>
+  <ul>
+    <li>
+      Many operations can't easily be done by async apps because they are blocking
+      <ul>
+        <li>DB access via DBI (including transactions)</li>
+        <li>Password hashing (bcrypt)</li>
+        <li>Net::LDAP, custom message queues, etc</li>
+      </ul>
+    </li>
+  </ul>
+</div>
+
+<div class="slide">
+  <h1>Callback::Frame</h1>
+  <ul>
+    <li>
+      Error handling/recovery was a sore-point in the old system
+      <ul>
+        <li>Errors should be accurately reported to client and conveniently logged</li>
+      </ul>
+    </li>
+  </ul>
+</div>
+
+
+<div class="slide">
+  <h1>Log::Defer</h1>
+  <ul>
+    <li>
+      Experience suggests that a lot of effort is spent writing log parsers
+      <ul>
+        <li>Lets you see the logs for a request in one atomic block (not interspersed)</li>
+        <li>Structured format means reusable parsing/processing tools</li>
+      </ul>
+    </li>
+  </ul>
+</div>
+
+
+<div class="slide">
+  <h1>AnyEvent::Task</h1>
+  <ul>
+    <li>Two components: <b>server</b> and <b>client</b></li>
+    <li>The server just exists to fork off new worker processes for clients</li>
+    <li>Each client keeps a pool of workers around</li>
+    <li>Async code can acquire "checkout objects" from the client which provide exclusive access to a worker while they are in scope</li>
+    <li>Clients and servers can be started in either order without losing requests</li>
+  </ul>
+</div>
+
+
+<div class="slide">
+  <h1>AnyEvent::Task Server/Client</h1>
+
+  <b>Server:</b>
+  <pre style="font-size:80%">
+AnyEvent::Task::Server->new(
+  listen => ['unix/', '/tmp/arithmetic.socket'],
+  interface => {
+                 add => sub { $_[0] + $_[1] },
+                 mult => sub { $_[0] * $_[1] },
+               },
+)->run;
+  </pre>
+
+  <b>Client:</b>
+  <pre style="font-size:80%">
+my $client = AnyEvent::Task::Client->new(
+               connect => ['unix/',
+                           '/tmp/arithmetic.socket'],
+             );
+  </pre>
+</div>
+
+
+<div class="slide">
+  <h1>Using AnyEvent::Task Client</h1>
+
+  Client object has a checkout method that returns a Checkout object representing exclusive access to a worker process
+
+  <br><br>
+
+  The checkout object has methods that correspond to the interface methods of the server.
+
+  <br><br>
+
+  <pre>
+  $client->checkout->add(5, 10, sub {
+    my ($checkout, $result) = @_;
+
+    say "5 + 10 = $result";
+  });
+  </pre>
+
+  After $checkout goes out of scope, the worker is returned to client's pool
+</div>
+
+
+
+
+
+<div class="slide">
+  <h1>Nested, no pipelining</h1>
+  <table><tr><td>
+  <img width="400" src="img/non-pipelined.svg">
+  </td><td>
+  <pre style="font-size: 70%">
+  $client->checkout->add(3, 4, sub {
+    my ($checkout, $result) = @_;
+
+    $checkout->mult($result, $result, sub {
+      my ($checkout, $result) = @_;
+
+      say "(3 + 4)^2 = $result";
+    });
+  });
+  </pre>
+  </td></tr></table>
+</div>
+
+
+<div class="slide">
+  <h1>Pipelining</h1>
+  <table><tr><td>
+  <img src="img/pipelined.svg">
+  </td><td>
+  <pre style="font-size: 67%">
+  my $checkout = $client->checkout;
+
+  my $x = $checkout->add(3, 4);
+
+  $checkout->mult($x, $x, sub {
+    my ($checkout, $result) = @_;
+
+    say "(3 + 4)^2 = $result";
+  });  
+  </pre>
+  Note that $x is a promise object here, not the value 7
+  </td></tr></table>
+</div>
+
+
+
+<div class="slide">
+  <h1>Advantages of Pipelining</h1>
+  <ul>
+    <li>Improves latency without having to add cumbersome, specialised methods like <b>add_and_square()</b></li>
+    <li>You can have simple, minimal APIs without taking a latency hit</li>
+    <li>Feels like you're programming synchronous code</li>
+  </ul>
+</div>
+
+
+<div class="slide">
+  <h1>Infectious Promises</h1>
+
+  You can call methods on promises, de-reference them, etc:<br><br>
+
+  <pre style="font-size: 65%">
+my $dbh = $client-&gt;checkout;
+
+## $row is a promise
+my $row = $dbh-&gt;selectrow_arrayref(q{ SELECT user_id,email
+                                      FROM user WHERE username = ? },
+                                   undef, $username);
+
+my $user_id = $row-&gt;[0]; # $user_id is a promise
+my $email = $row-&gt;[1]; # $email is a promise
+
+$dbh-&gt;do(q{ DELETE FROM user WHERE email = ? AND user_id != ? },
+         undef, $email, $user_id);
+
+$dbh-&gt;commit(sub {
+  ## All done
+});
+  </pre>
+</div>
+
+
+<div class="slide">
+  <h1>Callback::Frame</h1>
+  <ul>
+    <li>Associates error handlers and "local" bindings with the callbacks themselves</li>
+    <li>When callbacks are called, reinstates this <i>dynamic state</i></li>
+    <li>Lets you handle errors out-of-band instead of in-band (like exceptions instead of return codes)</li>
+    <li>Unobtrusive -- you can continue to use normal callback style</li>
+  </ul>
+</div>
+
+
+<div class="slide">
+  <h1>Broken Async Error Handling</h1>
+  <pre style="font-size: 80%">
+use AnyEvent;
+ 
+eval {
+  $watcher = AE::timer 0.1, 0,
+    sub {
+      die "some error";
+    };
+};
+ 
+## broken!
+if ($@) {
+  print STDERR "Oops: $@";
+}
+ 
+AE::cv->recv;
+  </pre>
+</div>
+
+
+
+<div class="slide">
+  <h1>Error Handling with Callback::Frame</h1>
+  <pre style="font-size: 80%">
+use AnyEvent;
+use Callback::Frame;
+ 
+frame_try {
+  $watcher = AE::timer 0.1, 0, <b>f</b>ub {
+                                 die "some error";
+                               };
+} frame_catch {
+  print STDERR "Oops: $@";
+};
+ 
+AE::cv->recv;
+  </pre>
+</div>
+
+<div class="slide">
+  <h1>Coping with in-band errors</h1>
+
+  <pre style="font-size: 80%">
+use AnyEvent::HTTP;
+use Callback::Frame;
+
+frame_try {
+  $req = http_get "http://google.com", <b>f</b>ub {
+    my ($body, $hdr) = @_;
+
+    ## Handle errors elsewhere:
+    die "request failed" if $hdr->{Status} !~ /^2/;
+
+    print "Request OK\n";
+  };
+} frame_catch {
+  print "Handling error: $@\n";
+};
+
+AE::cv->recv;
+  </pre>
+</div>
+
+
+<div class="slide">
+  <h1>Log::Defer</h1>
+
+  I believe a lot of log processing is done too early
+
+  <ul>
+    <li>
+      Defer the recording of log messages until some "transaction" has completed
+      <ul>
+        <li>A transaction is an HTTP request, cron-job, whatever</li>
+        <li>Helps follow progress in async apps since thread/process IDs aren't accurate</li>
+      </ul>
+    </li>
+    <li>
+      Defer the rendering of log messages
+      <ul>
+        <li>If we store logs in a structured format, can decide how to render at display time</li>
+        <li>The goal is to <i>never write log parsers again</i>, just reusable renderers</li>
+      </ul>
+    </li>
+  </ul>
+</div>
+
+
+<div class="slide">
+  <h1>Structured Logging</h1>
+
+  File format is message-per-line, minified JSON:<br>
+
+  <pre style="font-size: 65%; white-space: pre-wrap;">
+{"logs":[[0.000158,30,"this is an info message"],[0.000192,20,"some kind of warning!"],[0.200223,10,"There was a serious error: unable to connect to network"]],"timers":[["parse req",0.000224,0.000239],["DB lookup",0.0003,0.152386],["connecting",0.153,0.201],["building resp",0.203,0.204386]],"end":0.205386,"start":1403408091.93565}
+  </pre>
+
+  Rendered with <b>log-defer-viz</b>:<br>
+
+  <pre style="font-size: 55%; background: black; color: white;">
+$ log-defer-viz file.log
+
+<span style="background:#CCC; color:black">------ 2014-06-21 Sat 23:34:51.93565 EDT (1403408091.93565) ------</span>
+  | 0.000158 <span style="color:#00FF00">[ INFO] this is an info message</span>
+  | 0.000192 <span style="color:yellow">[ WARN] some kind of warning!</span>
+  | 0.200223 <span style="color:red">[ERROR] There was a serious error: unable to connect to network</span>
+  |_0.205386 [END]
+
+     parse req X
+     DB lookup |=====================================================|
+    connecting                                                       |================|
+ building resp                                                                         X
+_______________________________________________________________________________________________
+times in ms    0.2                                                   153.0            203.0
+                                                                     152.4            201.0
+  </pre>
+</div>
+
+
+
+<div class="slide">
+  <h1>log-defer-viz</h1>
+
+  Muffle warnings:
+  <pre> $ log-defer-viz --nowarn *.log </pre>
+  Follow log file's tail:
+  <pre> $ log-defer-viz -f file.log </pre>
+  Do-What-I-Mean with compressed files:
+  <pre> $ log-defer-viz file.log.gz file2.log.bz2 </pre>
+  View times in UTC (instead of local time):
+  <pre> $ log-defer-viz --tz UTC file.log </pre>
+  Sort and merge logs from multiple servers:
+  <pre> $ log-defer-viz --sort-time www*/access.2014-02-12.log </pre>
+
+</div>
+
+
+<div class="slide">
+  <h1>grep and map</h1>
+
+  Only show requests that took longer than 500ms:
+  <pre> $ log-defer-viz --grep '$_->{end} > 0.5' file.log </pre>
+
+  JSON format is pre-grepable for performance:
+  <pre> $ grep 192.168.0.77 file.log | log-defer-viz</pre>
+
+  Extract usernames from data section, tally occurrences:
+  <pre> $ log-defer-viz --map '$_->{data}{username}' *.log \
+   | sort | uniq -c | sort -rn
+</pre>
+</div>
+
+
+<div class="slide">
+  <h1>Questions?</h1>
+
+  <ul>
+    <li><b>AnyEvent::Task</b></li>
+    <li><b>Callback::Frame</b></li>
+    <li><b>Log::Defer</b> / <b>Log::Defer::Viz</b></li>
+  <ul>
+
+  <br><br>
+  All on CPAN and <a href="https://github.com/hoytech">https://github.com/hoytech</a>
+</div>
+
+
+</div>
+</body>
+</html>
