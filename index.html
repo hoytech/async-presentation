@@ -61,27 +61,19 @@
 
 <div class="slide">
   <h1>AnyEvent::Task</h1>
-  <ul>
-    <li>
       Many operations can't easily be done by async apps because they are blocking
-      <ul>
-        <li>DB access via DBI (including transactions)</li>
-        <li>Password hashing (bcrypt)</li>
-        <li>Net::LDAP, custom message queues, etc</li>
-      </ul>
-    </li>
+  <ul>
+    <li>DB access via DBI (including transactions)</li>
+    <li>Password hashing (bcrypt)</li>
+    <li>Net::LDAP, custom message queues, etc</li>
   </ul>
 </div>
 
 <div class="slide">
   <h1>Callback::Frame</h1>
   <ul>
-    <li>
-      Error handling/recovery was a sore-point in the old system
-      <ul>
-        <li>Errors should be accurately reported to client and conveniently logged</li>
-      </ul>
-    </li>
+    <li>Error handling/recovery was a sore-point in the old system</li>
+    <li>Errors should be accurately reported to client and conveniently logged</li>
   </ul>
 </div>
 
@@ -89,13 +81,9 @@
 <div class="slide">
   <h1>Log::Defer</h1>
   <ul>
-    <li>
-      Experience suggests that a lot of effort is spent writing log parsers
-      <ul>
-        <li>Lets you see the logs for a request in one atomic block (not interspersed)</li>
-        <li>Structured format means reusable parsing/processing tools</li>
-      </ul>
-    </li>
+    <li>Experience suggests that a lot of effort is spent writing log parsers</li>
+    <li>Lets you see the logs for a request in one atomic block (not interspersed)</li>
+    <li>Structured format means reusable parsing/processing tools</li>
   </ul>
 </div>
 
@@ -107,7 +95,7 @@
     <li>The server just exists to fork off new worker processes for clients</li>
     <li>Each client keeps a pool of workers around</li>
     <li>Async code can acquire "checkout objects" from the client which provide exclusive access to a worker while they are in scope</li>
-    <li>Clients and servers can be started in either order without losing requests</li>
+    <li>Queuing: Clients and servers can be started in either order without losing requests</li>
   </ul>
 </div>
 
@@ -139,7 +127,7 @@ my $client = AnyEvent::Task::Client->new(
 <div class="slide">
   <h1>Using AnyEvent::Task Client</h1>
 
-  Client object has a checkout method that returns a Checkout object representing exclusive access to a worker process
+  The client object has a checkout method that returns a checkout object representing exclusive access to a worker process
 
   <br><br>
 
@@ -148,7 +136,9 @@ my $client = AnyEvent::Task::Client->new(
   <br><br>
 
   <pre>
-  $client->checkout->add(5, 10, sub {
+  my $checkout = $client->checkout;
+
+  $checkout->add(5, 10, sub {
     my ($checkout, $result) = @_;
 
     say "5 + 10 = $result";
@@ -163,7 +153,7 @@ my $client = AnyEvent::Task::Client->new(
 
 
 <div class="slide">
-  <h1>Nested, no pipelining</h1>
+  <h1>Nested</h1>
   <table><tr><td>
   <img width="400" src="img/non-pipelined.svg">
   </td><td>
@@ -244,7 +234,7 @@ $dbh-&gt;commit(sub {
   <h1>Callback::Frame</h1>
   <ul>
     <li>Associates error handlers and "local" bindings with the callbacks themselves</li>
-    <li>When callbacks are called, reinstates this <i>dynamic state</i></li>
+    <li>When callbacks are called, the <i>dynamic state</i> is reinstated</li>
     <li>Lets you handle errors out-of-band instead of in-band (like exceptions instead of return codes)</li>
     <li>Unobtrusive -- you can continue to use normal callback style</li>
   </ul>
@@ -410,7 +400,7 @@ times in ms    0.2                                                   153.0      
   <h1>Questions?</h1>
 
   <ul>
-    <li><b>AnyEvent::Task</b></li>
+    <li><b>AnyEvent::Task</b> (also see github branch <b>rpc-pipelined</b>)</li>
     <li><b>Callback::Frame</b></li>
     <li><b>Log::Defer</b> / <b>Log::Defer::Viz</b></li>
   <ul>
